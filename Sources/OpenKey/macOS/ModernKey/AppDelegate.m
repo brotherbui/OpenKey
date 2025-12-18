@@ -112,6 +112,13 @@ extern bool convertToolDontAlertWhenCompleted;
 - (void)applicationDidFinishLaunching:(NSNotification *)aNotification {
     appDelegate = self;
     
+    // Remove unused menus to fix "Internal inconsistency" warnings
+    // OpenKey is a status bar app and doesn't need standard document menus
+    NSMenu *mainMenu = [NSApp mainMenu];
+    while ([mainMenu numberOfItems] > 1) {
+        [mainMenu removeItemAtIndex:1];
+    }
+    
     [self registerSupportedNotification];
     
     //set quick tooltip

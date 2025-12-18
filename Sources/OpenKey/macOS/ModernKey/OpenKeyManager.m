@@ -74,8 +74,9 @@ static CFRunLoopSourceRef runLoopSource;
     // Enable the event tap.
     CGEventTapEnable(eventTap, true);
     
-    // Set it all running.
-    CFRunLoopRun();
+    // Note: CFRunLoopRun() is not needed here because the main run loop
+    // is already running (managed by AppKit). The event tap will receive
+    // events through the run loop source we added above.
     
     return YES;
 }
