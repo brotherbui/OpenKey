@@ -17,6 +17,11 @@
                             (_flag & kCGEventFlagMaskAlternate) || (_flag & kCGEventFlagMaskSecondaryFn) || \
                             (_flag & kCGEventFlagMaskNumericPad) || (_flag & kCGEventFlagMaskHelp)
 
+// Special panel apps that don't trigger NSWorkspaceDidActivateApplicationNotification
+NSArray* _specialPanelApps = @[@"com.apple.Spotlight",
+                               @"com.raycast.macos",
+                               @"com.apple.inputmethod.EmojiFunctionRowItem"];
+
 #define DYNA_DATA(macro, pos) (macro ? pData->macroData[pos] : pData->charData[pos])
 #define MAX_UNICODE_STRING  20
 #define EMPTY_HOTKEY 0xFE0000FE
@@ -84,6 +89,42 @@ extern "C" {
     vector<Byte> savedSmartSwitchKeyData; ////use for smart switch key
     
     NSString* _frontMostApp = @"UnknownApp";
+    NSString* _lastFrontMostApp = @"UnknownApp";
+    
+    // Forward declaration for smart switch key
+    void OnActiveAppChanged(void);
+    
+    /**
+     * Get the bundle identifier of the app that owns the currently focused UI element.
+     * This works for special panel apps like Spotlight and Raycast that don't become
+     * the frontmost application in the traditional sense.
+     */
+    NSString* getFocusedAppBundleId() {
+        AXUIElementRef systemWide = AXUIElementCreateSystemWide();
+        AXUIElementRef focusedElement = NULL;
+        NSString* bundleId = nil;
+        
+        AXError error = AXUIElementCopyAttributeValue(systemWide, kAXFocusedUIElementAttribute, (CFTypeRef*)&focusedElement);
+        
+        if (error == kAXErrorSuccess && focusedElement != NULL) {
+            pid_t pid = 0;
+            error = AXUIElementGetPid(focusedElement, &pid);
+            
+            if (error == kAXErrorSuccess && pid > 0) {
+                NSRunningApplication* app = [NSRunningApplication runningApplicationWithProcessIdentifier:pid];
+                if (app != nil) {
+                    bundleId = app.bundleIdentifier;
+                    if (bundleId == nil) {
+                        bundleId = app.localizedName;
+                    }
+                }
+            }
+            CFRelease(focusedElement);
+        }
+        
+        CFRelease(systemWide);
+        return bundleId;
+    }
     
     void OpenKeyInit() {
         //load saved data
@@ -153,11 +194,35 @@ extern "C" {
     }
     
     void queryFrontMostApp() {
+        // First try to get the focused app using Accessibility API
+        // This works for special panel apps like Spotlight and Raycast
+        NSString* focusedApp = getFocusedAppBundleId();
+        
+        if (focusedApp != nil && [focusedApp compare:OPENKEY_BUNDLE] != 0) {
+            _frontMostApp = focusedApp;
+            return;
+        }
+        
+        // Fallback to traditional frontmostApplication API
         if ([[[NSWorkspace sharedWorkspace] frontmostApplication].bundleIdentifier compare:OPENKEY_BUNDLE] != 0) {
             _frontMostApp = [[NSWorkspace sharedWorkspace] frontmostApplication].bundleIdentifier;
             if (_frontMostApp == nil)
                 _frontMostApp = [[NSWorkspace sharedWorkspace] frontmostApplication].localizedName != nil ?
                 [[NSWorkspace sharedWorkspace] frontmostApplication].localizedName : @"UnknownApp";
+        }
+    }
+    
+    /**
+     * Check if the currently focused app has changed and trigger smart switch if needed.
+     * This is especially important for special panel apps (Spotlight, Raycast, etc.)
+     * that don't trigger NSWorkspaceDidActivateApplicationNotification.
+     */
+    void checkSpecialPanelApp() {
+        NSString* focusedApp = getFocusedAppBundleId();
+        if (focusedApp != nil && ![focusedApp isEqualToString:_lastFrontMostApp]) {
+            _lastFrontMostApp = focusedApp;
+            // Trigger smart switch for any app change detected via accessibility API
+            OnActiveAppChanged();
         }
     }
     
@@ -579,6 +644,12 @@ extern "C" {
         //dont handle my event
         if (CGEventGetIntegerValueField(event, kCGEventSourceStateID) == CGEventSourceGetSourceStateID(myEventSource)) {
             return event;
+        }
+        
+        // Check for special panel apps (Spotlight, Raycast) on keyboard events
+        // These apps don't trigger NSWorkspaceDidActivateApplicationNotification
+        if (vUseSmartSwitchKey && (type == kCGEventKeyDown || type == kCGEventKeyUp)) {
+            checkSpecialPanelApp();
         }
         
         _flag = CGEventGetFlags(event);
